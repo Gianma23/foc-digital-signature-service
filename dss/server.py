@@ -1,12 +1,11 @@
-import base64
 import json
 import os
 import socket
 import threading
 from pathlib import Path
 
-from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
+from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from common import (
@@ -23,22 +22,26 @@ DB_PATH = DATA_DIR / "users.json"
 HOST = "127.0.0.1"
 PORT = 5050
 
-# -----------------------------
-# Persistent server keys
-# -----------------------------
+RSA_KEY_SIZE = 2048  # puoi mettere 3072 se vuoi
+
+
 def ensure_dirs():
     DATA_DIR.mkdir(exist_ok=True)
     KEYS_DIR.mkdir(exist_ok=True)
 
-def load_or_create_server_signing_key() -> ed25519.Ed25519PrivateKey:
-    priv_path = KEYS_DIR / "dss_ed25519_private.pem"
-    pub_path = KEYS_DIR / "dss_ed25519_public.pem"
+
+# -----------------------------
+# Persistent server RSA signing keys (DSS)
+# -----------------------------
+def load_or_create_server_signing_key() -> rsa.RSAPrivateKey:
+    priv_path = KEYS_DIR / "dss_rsa_private.pem"
+    pub_path = KEYS_DIR / "dss_rsa_public.pem"
 
     if priv_path.exists() and pub_path.exists():
         priv = serialization.load_pem_private_key(priv_path.read_bytes(), password=None)
         return priv
 
-    priv = ed25519.Ed25519PrivateKey.generate()
+    priv = rsa.generate_private_key(public_exponent=65537, key_size=RSA_KEY_SIZE)
     pub = priv.public_key()
 
     priv_path.write_bytes(
@@ -54,17 +57,16 @@ def load_or_create_server_signing_key() -> ed25519.Ed25519PrivateKey:
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
         )
     )
-    print(f"[server] Created DSS signing keypair in {KEYS_DIR}")
+    print(f"[server] Created DSS RSA signing keypair in {KEYS_DIR}")
     print(f"[server] Distribute public key to users offline: {pub_path}")
     return priv
 
+
 def load_or_create_master_key() -> bytes:
-    """
-    Master key for encrypting stored user private keys at rest.
-    """
     mk_path = KEYS_DIR / "master_key.bin"
     env = os.environ.get("DSS_MASTER_KEY_B64")
     if env:
+        import base64
         return base64.b64decode(env.encode("ascii"))
 
     if mk_path.exists():
@@ -75,6 +77,7 @@ def load_or_create_master_key() -> bytes:
     print(f"[server] Created master key in {mk_path} (keep it secret!)")
     return mk
 
+
 # -----------------------------
 # DB helpers
 # -----------------------------
@@ -83,19 +86,22 @@ def load_db() -> dict:
         return {"users": {}}
     return json.loads(DB_PATH.read_text(encoding="utf-8"))
 
+
 def save_db(db: dict) -> None:
     DB_PATH.write_text(json.dumps(db, indent=2, sort_keys=True), encoding="utf-8")
 
+
 def get_user(db: dict, username: str) -> dict | None:
     return db["users"].get(username)
+
 
 # -----------------------------
 # Key-at-rest encryption
 # -----------------------------
 def user_wrap_key(master_key: bytes, username: str) -> bytes:
-    # Derive a per-user wrapping key from master key
     salt = sha256(username.encode("utf-8"))
     return hkdf_expand(master_key, salt=salt, info=b"DSS|USERKEYWRAP", length=32)
+
 
 def encrypt_at_rest(master_key: bytes, username: str, plaintext: bytes) -> tuple[bytes, bytes]:
     k = user_wrap_key(master_key, username)
@@ -103,12 +109,14 @@ def encrypt_at_rest(master_key: bytes, username: str, plaintext: bytes) -> tuple
     ct = AESGCM(k).encrypt(nonce, plaintext, b"DSS|ATREST|" + username.encode("utf-8"))
     return nonce, ct
 
+
 def decrypt_at_rest(master_key: bytes, username: str, nonce: bytes, ciphertext: bytes) -> bytes:
     k = user_wrap_key(master_key, username)
     return AESGCM(k).decrypt(nonce, ciphertext, b"DSS|ATREST|" + username.encode("utf-8"))
 
+
 # -----------------------------
-# DSS operations
+# DSS operations (RSA user keys)
 # -----------------------------
 def op_create_keys(db: dict, master_key: bytes, username: str) -> dict:
     u = get_user(db, username)
@@ -120,7 +128,7 @@ def op_create_keys(db: dict, master_key: bytes, username: str) -> dict:
     if u.get("user_keys"):
         return {"ok": True, "msg": "Keypair already exists (no-op)"}
 
-    priv = ed25519.Ed25519PrivateKey.generate()
+    priv = rsa.generate_private_key(public_exponent=65537, key_size=RSA_KEY_SIZE)
     pub = priv.public_key()
 
     priv_bytes = priv.private_bytes(
@@ -139,16 +147,24 @@ def op_create_keys(db: dict, master_key: bytes, username: str) -> dict:
         "pub_pem_b64": b64e(pub_bytes),
         "priv_nonce_b64": b64e(nonce),
         "priv_ct_b64": b64e(ct),
-        "alg": "Ed25519",
+        "alg": f"RSA-{RSA_KEY_SIZE}",
+        "sig_scheme": "RSASSA-PSS-SHA256",
     }
     save_db(db)
-    return {"ok": True, "msg": "Keypair created"}
+    return {"ok": True, "msg": "RSA keypair created"}
+
 
 def op_get_public_key(db: dict, target_user: str) -> dict:
     u = get_user(db, target_user)
     if not u or not u.get("user_keys"):
         return {"ok": False, "err": "No public key for that user"}
-    return {"ok": True, "public_key_pem_b64": u["user_keys"]["pub_pem_b64"], "alg": u["user_keys"]["alg"]}
+    return {
+        "ok": True,
+        "public_key_pem_b64": u["user_keys"]["pub_pem_b64"],
+        "alg": u["user_keys"]["alg"],
+        "sig_scheme": u["user_keys"]["sig_scheme"],
+    }
+
 
 def op_sign_doc(db: dict, master_key: bytes, username: str, doc_b64: str) -> dict:
     u = get_user(db, username)
@@ -161,9 +177,18 @@ def op_sign_doc(db: dict, master_key: bytes, username: str, doc_b64: str) -> dic
     priv_pem = decrypt_at_rest(master_key, username, nonce, ct)
 
     priv = serialization.load_pem_private_key(priv_pem, password=None)
+
     doc = b64d(doc_b64)
-    sig = priv.sign(doc)
-    return {"ok": True, "signature_b64": b64e(sig), "alg": uk["alg"]}
+    sig = priv.sign(
+        doc,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
+    return {"ok": True, "signature_b64": b64e(sig), "alg": uk["alg"], "sig_scheme": uk["sig_scheme"]}
+
 
 def op_delete_keys(db: dict, username: str) -> dict:
     u = get_user(db, username)
@@ -171,20 +196,20 @@ def op_delete_keys(db: dict, username: str) -> dict:
         return {"ok": False, "err": "User not registered/active"}
 
     u.pop("user_keys", None)
-    # Spec: after delete cannot create again unless offline registered
     u["blocked_after_delete"] = True
     save_db(db)
     return {"ok": True, "msg": "Keypair deleted; user blocked until offline re-registered"}
 
+
 # -----------------------------
 # Handshake + client handler
 # -----------------------------
-def do_handshake(sock: socket.socket, dss_priv: ed25519.Ed25519PrivateKey) -> SecureChannel:
+def do_handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel:
     """
     Handshake:
       C->S: ClientHello {crand, cpub}
       S->C: ServerHello {srand, spub, sig(transcript)}
-    Both derive X25519 shared secret and then 2x (key, nonce) for each direction.
+    Signature: RSA-PSS(SHA256) over sha256(transcript)
     """
     client_hello = recv_frame(sock)
     if client_hello.get("type") != "client_hello":
@@ -205,10 +230,20 @@ def do_handshake(sock: socket.socket, dss_priv: ed25519.Ed25519PrivateKey) -> Se
     }
 
     transcript = canonical_json(client_hello) + canonical_json(server_hello_no_sig)
-    sig = dss_priv.sign(sha256(transcript))
+    h = sha256(transcript)
+
+    sig = dss_priv.sign(
+        h,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
 
     server_hello = dict(server_hello_no_sig)
     server_hello["sig_b64"] = b64e(sig)
+    server_hello["sig_scheme"] = "RSA-PSS-SHA256"
     send_frame(sock, server_hello)
 
     shared = s_eph_priv.exchange(cpub)
@@ -226,11 +261,11 @@ def do_handshake(sock: socket.socket, dss_priv: ed25519.Ed25519PrivateKey) -> Se
         s2c=ChannelKeys(key=s2c_key, base_nonce=s2c_nonce),
     )
 
+
 def handle_client(conn: socket.socket, addr, dss_priv, master_key):
     try:
         ch = do_handshake(conn, dss_priv)
 
-        # First encrypted message must be Auth
         outer = recv_frame(conn)
         auth = ch.decrypt_c2s(outer)
         if auth.get("type") != "auth":
@@ -238,26 +273,23 @@ def handle_client(conn: socket.socket, addr, dss_priv, master_key):
 
         username = auth.get("username", "")
         password = auth.get("password", "")
-        new_password = auth.get("new_password")  # optional
+        new_password = auth.get("new_password")
 
         db = load_db()
         u = get_user(db, username)
         if not u or not u.get("active", False):
-            resp = {"ok": False, "err": "Unknown/inactive user"}
-            send_frame(conn, ch.encrypt_s2c({"type": "auth_resp", **resp}))
+            send_frame(conn, ch.encrypt_s2c({"type": "auth_resp", "ok": False, "err": "Unknown/inactive user"}))
             return
 
         salt = b64d(u["pw_salt_b64"])
         pw_hash = b64d(u["pw_hash_b64"])
         if not verify_password(password, salt, pw_hash):
-            resp = {"ok": False, "err": "Bad credentials"}
-            send_frame(conn, ch.encrypt_s2c({"type": "auth_resp", **resp}))
+            send_frame(conn, ch.encrypt_s2c({"type": "auth_resp", "ok": False, "err": "Bad credentials"}))
             return
 
         if u.get("first_login", False):
             if not new_password:
-                resp = {"ok": False, "err": "Password must be changed at first login"}
-                send_frame(conn, ch.encrypt_s2c({"type": "auth_resp", **resp}))
+                send_frame(conn, ch.encrypt_s2c({"type": "auth_resp", "ok": False, "err": "Password must be changed at first login"}))
                 return
             nsalt, nhash = hash_password(new_password)
             u["pw_salt_b64"] = b64e(nsalt)
@@ -267,11 +299,9 @@ def handle_client(conn: socket.socket, addr, dss_priv, master_key):
 
         send_frame(conn, ch.encrypt_s2c({"type": "auth_resp", "ok": True, "msg": "Authenticated"}))
 
-        # Main loop: encrypted requests
         while True:
             outer = recv_frame(conn)
             req = ch.decrypt_c2s(outer)
-
             if req.get("type") != "req":
                 raise ValueError("Expected req")
 
@@ -315,6 +345,7 @@ def handle_client(conn: socket.socket, addr, dss_priv, master_key):
         except Exception:
             pass
 
+
 def main():
     ensure_dirs()
     dss_priv = load_or_create_server_signing_key()
@@ -334,6 +365,7 @@ def main():
                 daemon=True,
             )
             t.start()
+
 
 if __name__ == "__main__":
     main()

@@ -1,9 +1,10 @@
 import base64
+import os
 import socket
 from pathlib import Path
 
-from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
+from cryptography.hazmat.primitives import serialization, hashes
 
 from common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
@@ -14,18 +15,20 @@ HOST = "127.0.0.1"
 PORT = 5050
 
 BASE = Path(__file__).resolve().parent
-SERVER_PUBKEY_PATH = BASE / "server_data" / "keys" / "dss_ed25519_public.pem"
+SERVER_PUBKEY_PATH = BASE / "server_data" / "keys" / "dss_rsa_public.pem"
 
-def load_server_pubkey() -> ed25519.Ed25519PublicKey:
+
+def load_server_pubkey() -> rsa.RSAPublicKey:
     if not SERVER_PUBKEY_PATH.exists():
         raise FileNotFoundError(
-            f"Missing DSS public key at {SERVER_PUBKEY_PATH}. "
+            f"Missing DSS RSA public key at {SERVER_PUBKEY_PATH}. "
             f"Run server.py once, then distribute this public key to clients (offline)."
         )
     pub = serialization.load_pem_public_key(SERVER_PUBKEY_PATH.read_bytes())
     return pub
 
-def do_handshake(sock: socket.socket, server_pub: ed25519.Ed25519PublicKey) -> SecureChannel:
+
+def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureChannel:
     c_eph_priv = x25519.X25519PrivateKey.generate()
     cpub_bytes = c_eph_priv.public_key().public_bytes(
         encoding=serialization.Encoding.Raw,
@@ -49,8 +52,18 @@ def do_handshake(sock: socket.socket, server_pub: ed25519.Ed25519PublicKey) -> S
     server_hello_no_sig.pop("sig_b64", None)
 
     transcript = canonical_json(client_hello) + canonical_json(server_hello_no_sig)
-    # verify signature over sha256(transcript)
-    server_pub.verify(sig, sha256(transcript))
+    h = sha256(transcript)
+
+    # verify RSA-PSS(SHA256) over sha256(transcript)
+    server_pub.verify(
+        sig,
+        h,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
 
     spub = x25519.X25519PublicKey.from_public_bytes(b64d(server_hello["x25519_pub_b64"]))
     shared = c_eph_priv.exchange(spub)
@@ -68,14 +81,15 @@ def do_handshake(sock: socket.socket, server_pub: ed25519.Ed25519PublicKey) -> S
         s2c=ChannelKeys(key=s2c_key, base_nonce=s2c_nonce),
     )
 
+
 def req(ch: SecureChannel, sock: socket.socket, op: str, **kwargs) -> dict:
     inner = {"type": "req", "op": op, **kwargs}
     send_frame(sock, ch.encrypt_c2s(inner))
     outer = recv_frame(sock)
     return ch.decrypt_s2c(outer)
 
+
 def main():
-    import os
     server_pub = load_server_pubkey()
 
     username = input("Username: ").strip()
@@ -87,7 +101,6 @@ def main():
     with socket.create_connection((HOST, PORT)) as sock:
         ch = do_handshake(sock, server_pub)
 
-        # Auth
         auth_inner = {"type": "auth", "username": username, "password": password}
         if new_password:
             auth_inner["new_password"] = new_password
@@ -135,6 +148,7 @@ def main():
                 break
             else:
                 print("Unknown command")
+
 
 if __name__ == "__main__":
     main()
