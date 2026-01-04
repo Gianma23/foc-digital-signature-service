@@ -5,6 +5,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
+from common import ChannelKeysCBC
 
 from common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
@@ -70,15 +71,18 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     salt = sha256(transcript)
     session_id = sha256(b"DSS|SID|" + transcript)[:16]
 
-    c2s_key = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|KEY", length=32)
-    s2c_key = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|KEY", length=32)
-    c2s_nonce = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|NONCE", length=12)
-    s2c_nonce = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|NONCE", length=12)
+    cc2s_enc = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|ENC", length=32)
+    c2s_mac = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|MAC", length=32)
+    c2s_iv  = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|IV",  length=16)
+
+    s2c_enc = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|ENC", length=32)
+    s2c_mac = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|MAC", length=32)
+    s2c_iv  = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|IV",  length=16)
 
     return SecureChannel(
         session_id=session_id,
-        c2s=ChannelKeys(key=c2s_key, base_nonce=c2s_nonce),
-        s2c=ChannelKeys(key=s2c_key, base_nonce=s2c_nonce),
+        c2s=ChannelKeysCBC(enc_key=c2s_enc, mac_key=c2s_mac, base_iv=c2s_iv),
+        s2c=ChannelKeysCBC(enc_key=s2c_enc, mac_key=s2c_mac, base_iv=s2c_iv),
     )
 
 
