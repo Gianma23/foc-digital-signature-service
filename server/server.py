@@ -12,13 +12,15 @@ from cryptography.hazmat.primitives import hashes, hmac
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
     sha256, hkdf_expand, SecureChannel, ChannelKeysCBC,
-    verify_password, hash_password, hmac_sha256, _aes_cbc_encrypt
+    verify_password, hash_password, hmac_sha256, _aes_cbc_encrypt,
+    hmac_verify, _aes_cbc_decrypt
 )
 
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "server_data"
 KEYS_DIR = DATA_DIR / "keys"
 DB_PATH = DATA_DIR / "users.json"
+DELTA_TIME = 2 * 60  
 
 HOST = "127.0.0.1"
 PORT = 5050
@@ -305,15 +307,15 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
         raise ValueError("Expected challenge")
     ch.pop("type")
     tag = b64d(ch.pop("tag_b64", None))
-    if hmac_verify(HMAC_key, canonical_json(ch), tag) is False:
+    if hmac_verify(sh_HMAC_key, canonical_json(ch), tag) is False:
         raise ValueError("Invalid HMAC on challenge")
     
     ct = b64d(ch["ct_b64"])
     iv = b64d(ch["iv_b64"])
     timestamp = ch["timestamp"]
 
-    pt = _aes_cbc_decrypt(AES_key, iv, ct)
-    if pt != salt:
+    pt = _aes_cbc_decrypt(sh_AES_key, iv, ct)
+    if pt != th:
         raise ValueError("Invalid challenge response plaintext")
     
     if abs(timestamp - time.time()) > DELTA_TIME:
