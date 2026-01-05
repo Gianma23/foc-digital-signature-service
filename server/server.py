@@ -243,41 +243,41 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
         "dh_group": "RFC3526-group14-2048",
     })
 
-    m = recv_frame(sock)
-    c_pub = x25519.X25519PublicKey.from_public_bytes(b64d(m["x25519_pub_b64"]))
+    Y_client = recv_frame(sock)
+    c_pub = x25519.X25519PublicKey.from_public_bytes(b64d(Y_client["x25519_pub_b64"]))
 
-    s_eph_priv = x25519.X25519PrivateKey.generate()
-    spub_bytes = s_eph_priv.public_key().public_bytes_raw()
-    
+    s_priv_eph = x25519.X25519PrivateKey.generate()
+    s_pub_bytes = s_priv_eph.public_key().public_bytes_raw()
+
+    s_pub = {
+        "type": "Ysrv",
+        "x25519_pub_b64": b64e(s_pub_bytes),
+        "sig_scheme": "RSA-PSS-SHA256"
+    }
+
     sig = dss_priv.sign(
-        sha256(spub_bytes),
+        s_pub,
         padding.PSS(
             mgf=padding.MGF1(hashes.SHA256()),
             salt_length=padding.PSS.MAX_LENGTH,
         ),
         hashes.SHA256(),
     )
-    s_pub = {
-        "type": "Ysrv",
-        "sig_b64": b64e(sig),
-        "sig_scheme": "RSA-PSS-SHA256",
-    }
+
+    s_pub["sig_b64"] = b64e(sig)
 
     send_frame(sock, s_pub)
 
     print("[server] Handshake complete (not fully implemented)")
 
-    # shared = s_eph_priv.exchange(cpub)
-    # salt = sha256(transcript)
+    shared = s_priv_eph.exchange(c_pub)
+
+    salt = sha256(c_pub.public_bytes() + s_pub_bytes)
+
+    sh_AES_key = hkdf_expand(shared, salt=salt, info=b"DSS|SHARED|AES", length=32)
+    sh_HMAC_key = hkdf_expand(shared, salt=salt, info=b"DSS|SHARED|HMAC", length=32)
+
     # session_id = sha256(b"DSS|SID|" + transcript)[:16]
-
-    # c2s_enc = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|ENC", length=32)
-    # c2s_mac = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|MAC", length=32)
-    # c2s_iv  = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|IV",  length=16)
-
-    # s2c_enc = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|ENC", length=32)
-    # s2c_mac = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|MAC", length=32)
-    # s2c_iv  = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|IV",  length=16)
 
     # return SecureChannel(
     #     session_id=session_id,
