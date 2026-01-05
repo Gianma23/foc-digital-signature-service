@@ -8,12 +8,12 @@ import time
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESCBC
-from cryptography.hazmat.primitives import hashes, HMAC
+from cryptography.hazmat.primitives import hashes, hmac
 
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
     sha256, hkdf_expand, SecureChannel, ChannelKeysCBC,
-    verify_password, hash_password
+    verify_password, hash_password, hmac_sha256
 )
 
 BASE = Path(__file__).resolve().parent
@@ -286,15 +286,15 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
     timestamp = time.time()
     ct = AESCBC(sh_AES_key, iv, transcript)
     content = canonical_json({
-        "ct": b64e(ct),
+        "ct_b64": b64e(ct),
         "timestamp": timestamp,
         "iv_b64": b64e(iv),
     })
-    tag_s = HMAC(sh_HMAC_key, content)
+    tag_s = hmac_sha256(sh_HMAC_key, content)
 
     send_frame(sock, {
         "type": "challenge",
-        "ciphertext_b64": b64e(ct),
+        "ct_b64": b64e(ct),
         "timestamp": timestamp,
         "iv_b64": b64e(iv),
         "hmac_b64": b64e(tag_s)
