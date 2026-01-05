@@ -7,9 +7,9 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from common import ChannelKeysCBC
+from shared.common import ChannelKeysCBC
 
-from common import (
+from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
     sha256, hkdf_expand, SecureChannel, ChannelKeys,
     verify_password, hash_password

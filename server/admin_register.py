@@ -3,7 +3,7 @@ import secrets
 import json
 from pathlib import Path
 
-from common import hash_password, b64e
+from shared.common import hash_password, b64e
 
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "server_data"

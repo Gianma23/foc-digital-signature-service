@@ -5,9 +5,9 @@ from pathlib import Path
 from .config import HOST, PORT, SERVER_PUBKEY_PATH
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
-from common import ChannelKeysCBC
+from shared.common import ChannelKeysCBC
 
-from common import (
+from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
     sha256, hkdf_expand, SecureChannel, ChannelKeys
 )
@@ -46,10 +46,7 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
 
     # ============== ECDHE ==============
     c_eph_priv = x25519.X25519PrivateKey.generate()
-    cpub_bytes = c_eph_priv.public_key().public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
+    cpub_bytes = c_eph_priv.public_key().public_bytes_raw()
     client_hello = {
         "x25519_pub_b64": b64e(cpub_bytes),
     }
