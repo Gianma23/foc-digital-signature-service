@@ -11,7 +11,7 @@ from shared.common import ChannelKeysCBC
 
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
-    sha256, hkdf_expand, SecureChannel, ChannelKeys,
+    sha256, hkdf_expand, SecureChannel,# ChannelKeys,
     verify_password, hash_password
 )
 
@@ -226,6 +226,7 @@ def do_handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChan
         "sig_scheme": "RSA-PSS-SHA256",
         "dh_group": "RFC3526-group14-2048",
     })
+    
     return None  # Handshake not implemented
 
     # cpub = x25519.X25519PublicKey.from_public_bytes(b64d(client_hello["x25519_pub_b64"]))

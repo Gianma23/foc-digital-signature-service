@@ -9,7 +9,7 @@ from shared.common import ChannelKeysCBC
 
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
-    sha256, hkdf_expand, SecureChannel, ChannelKeys
+    sha256, hkdf_expand, SecureChannel, #ChannelKeys
 )
 
 
@@ -43,30 +43,26 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     )
     if server_pub_pem != pinned_pem:
         raise ValueError("Server certificate/public key not trusted")
+    print("[+] Server certificate verified")
 
     # ============== ECDHE ==============
     c_eph_priv = x25519.X25519PrivateKey.generate()
     cpub_bytes = c_eph_priv.public_key().public_bytes_raw()
-    client_hello = {
+    send_frame(sock, {
         "x25519_pub_b64": b64e(cpub_bytes),
-    }
-    send_frame(sock, client_hello)
+    })
+    print("[+] Sent client ECDHE public key")
+    spub_msg = recv_frame(sock)
+    if spub_msg.get("type") != "Ysrv":
+        raise ValueError("Expected server ECDHE public key")
 
-    server_hello = recv_frame(sock)
-    if server_hello.get("type") != "server_hello":
-        raise ValueError("Expected server_hello")
-
-    sig = b64d(server_hello["sig_b64"])
-    server_hello_no_sig = dict(server_hello)
-    server_hello_no_sig.pop("sig_b64", None)
-
-    transcript = canonical_json(client_hello) + canonical_json(server_hello_no_sig)
-    h = sha256(transcript)
+    sig = b64d(spub_msg["sig_b64"])
+    spub_msg.pop("sig_b64", None)
 
     # verify RSA-PSS(SHA256) over sha256(transcript)
     server_pub.verify(
         sig,
-        h,
+        spub_msg,
         padding.PSS(
             mgf=padding.MGF1(hashes.SHA256()),
             salt_length=padding.PSS.MAX_LENGTH,
@@ -74,24 +70,24 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
         hashes.SHA256(),
     )
 
-    spub = x25519.X25519PublicKey.from_public_bytes(b64d(server_hello["x25519_pub_b64"]))
+    spub = x25519.X25519PublicKey.from_public_bytes(b64d(spub_msg["x25519_pub_b64"]))
     shared = c_eph_priv.exchange(spub)
+    print("[+] Computed shared secret with ECDHE")
+
+    # ============== Key Derivation ==============
+    transcript = spub.public_bytes() + cpub_bytes
     salt = sha256(transcript)
     session_id = sha256(b"DSS|SID|" + transcript)[:16]
 
-    c2s_enc = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|ENC", length=32)
-    c2s_mac = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|MAC", length=32)
-    c2s_iv  = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|IV",  length=16)
+    AES_key = hkdf_expand(shared, salt=salt, info=b"DSS|AES", length=32)
+    HMAC_key = hkdf_expand(shared, salt=salt, info=b"DSS|HMAC", length=32)
 
-    s2c_enc = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|ENC", length=32)
-    s2c_mac = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|MAC", length=32)
-    s2c_iv  = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|IV",  length=16)
+    print("[+] Computed shared secret with ECDHE")
+    #TODO: rimuovere chiavi effimere
 
-    return SecureChannel(
-        session_id=session_id,
-        c2s=ChannelKeysCBC(enc_key=c2s_enc, mac_key=c2s_mac, base_iv=c2s_iv),
-        s2c=ChannelKeysCBC(enc_key=s2c_enc, mac_key=s2c_mac, base_iv=s2c_iv),
-    )
+    # ============== Challenge Response ==============
+    
+
 
 
 def req(ch: SecureChannel, sock: socket.socket, op: str, **kwargs) -> dict:
