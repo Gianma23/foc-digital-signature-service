@@ -305,14 +305,6 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
     if handshake_closure.get("type") != "response":
         raise ValueError("Expected response")
 
-    # session_id = sha256(b"DSS|SID|" + transcript)[:16]
-
-    # return SecureChannel(
-    #     session_id=session_id,
-    #     c2s=ChannelKeysCBC(enc_key=c2s_enc, mac_key=c2s_mac, base_iv=c2s_iv),
-    #     s2c=ChannelKeysCBC(enc_key=s2c_enc, mac_key=s2c_mac, base_iv=s2c_iv),
-    # )
-
 
 def handle_client(conn: socket.socket, addr, dss_priv, master_key):
     try:
