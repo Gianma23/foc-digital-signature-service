@@ -7,11 +7,10 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from shared.common import ChannelKeysCBC
 
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
-    sha256, hkdf_expand, SecureChannel,# ChannelKeys,
+    sha256, hkdf_expand, SecureChannel, ChannelKeysCBC,
     verify_password, hash_password
 )
 
@@ -205,12 +204,29 @@ def op_delete_keys(db: dict, username: str) -> dict:
 # -----------------------------
 # Handshake + client handler
 # -----------------------------
-def do_handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel:
+def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel:
     """
     Handshake:
       C->S: ClientHello {crand, cpub}
       S->C: ServerHello {srand, spub, sig(transcript)}
     Signature: RSA-PSS(SHA256) over sha256(transcript)
+    """
+    """
+    Implementa l'handshake del diagramma:
+
+    1) C->S: Hello
+    2) S->C: CertS (qui: PEM della server public key)
+    3) C->S: Yclient = g^a mod p
+    4) S->C: Ysrv = g^b mod p  +  sig(Ysrv, srv_privkey)
+    5) Deriva:
+         sh_sec = Yclient^b mod p
+         sh_AES_key  = H(sh_sec)
+         sh_HMAC_key = H(invert(sh_sec))
+    6) C->S: (IV || HMAC(IV))
+    7) C->S: ct = Enc_CBC(nonce, sh_AES_key, IV)
+    8) S->C: (IV2 || HMAC(IV2))
+    9) S->C: ct2 = Enc_CBC( HMAC(inv_nonce) || timestamp, sh_AES_key, IV2)
+    10) C->S: "OK"
     """
     client_hello = recv_frame(sock)
     if client_hello.get("type") != "hello":
@@ -226,51 +242,42 @@ def do_handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChan
         "sig_scheme": "RSA-PSS-SHA256",
         "dh_group": "RFC3526-group14-2048",
     })
-    
-    return None  # Handshake not implemented
 
-    # cpub = x25519.X25519PublicKey.from_public_bytes(b64d(client_hello["x25519_pub_b64"]))
-    # s_eph_priv = x25519.X25519PrivateKey.generate()
-    # spub_bytes = s_eph_priv.public_key().public_bytes(
-    #     encoding=serialization.Encoding.Raw,
-    #     format=serialization.PublicFormat.Raw,
-    # )
+    Y_client = recv_frame(sock)
+    c_pub = x25519.X25519PublicKey.from_public_bytes(b64d(Y_client["x25519_pub_b64"]))
 
-    # server_hello_no_sig = {
-    #     "type": "server_hello",
-    #     "ver": 1,
-    #     "server_random_b64": b64e(os.urandom(32)),
-    #     "x25519_pub_b64": b64e(spub_bytes),
-    # }
+    s_priv_eph = x25519.X25519PrivateKey.generate()
+    s_pub_bytes = s_priv_eph.public_key().public_bytes_raw()
 
-    # transcript = canonical_json(client_hello) + canonical_json(server_hello_no_sig)
-    # h = sha256(transcript)
+    s_pub = {
+        "type": "Ysrv",
+        "x25519_pub_b64": b64e(s_pub_bytes),
+        "sig_scheme": "RSA-PSS-SHA256"
+    }
 
-    # sig = dss_priv.sign(
-    #     h,
-    #     padding.PSS(
-    #         mgf=padding.MGF1(hashes.SHA256()),
-    #         salt_length=padding.PSS.MAX_LENGTH,
-    #     ),
-    #     hashes.SHA256(),
-    # )
+    sig = dss_priv.sign(
+        s_pub,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
 
-    # server_hello = dict(server_hello_no_sig)
-    # server_hello["sig_b64"] = b64e(sig)
-    # server_hello["sig_scheme"] = "RSA-PSS-SHA256"
-    # send_frame(sock, server_hello)
+    s_pub["sig_b64"] = b64e(sig)
 
-    # shared = s_eph_priv.exchange(cpub)
-    # salt = sha256(transcript)
+    send_frame(sock, s_pub)
+
+    print("[server] Handshake complete (not fully implemented)")
+
+    shared = s_priv_eph.exchange(c_pub)
+
+    salt = sha256(c_pub.public_bytes() + s_pub_bytes)
+
+    sh_AES_key = hkdf_expand(shared, salt=salt, info=b"DSS|SHARED|AES", length=32)
+    sh_HMAC_key = hkdf_expand(shared, salt=salt, info=b"DSS|SHARED|HMAC", length=32)
+
     # session_id = sha256(b"DSS|SID|" + transcript)[:16]
-
-    # c2s_enc = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|ENC", length=32)
-    # c2s_mac = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|MAC", length=32)
-    # c2s_iv  = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|IV",  length=16)
-
-    # s2c_enc = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|ENC", length=32)
-    # s2c_mac = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|MAC", length=32)
-    # s2c_iv  = hkdf_expand(shared, salt=salt, info=b"DSS|S2C|IV",  length=16)
 
     # return SecureChannel(
     #     session_id=session_id,
@@ -281,7 +288,7 @@ def do_handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChan
 
 def handle_client(conn: socket.socket, addr, dss_priv, master_key):
     try:
-        ch = do_handshake(conn, dss_priv)
+        ch = handshake(conn, dss_priv)
 
         outer = recv_frame(conn)
         auth = ch.decrypt_c2s(outer)
