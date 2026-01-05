@@ -2,14 +2,15 @@ import base64
 import os
 import socket
 from pathlib import Path
-from .config import HOST, PORT, SERVER_PUBKEY_PATH
+import time
+from .config import HOST, PORT, SERVER_PUBKEY_PATH, DELTA_TIME
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
 from shared.common import ChannelKeysCBC
 
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
-    sha256, hkdf_expand, SecureChannel, #ChannelKeys
+    sha256, hkdf_expand, SecureChannel, hmac_verify, _aes_cbc_decrypt
 )
 
 
@@ -48,9 +49,10 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     # ============== ECDHE ==============
     c_eph_priv = x25519.X25519PrivateKey.generate()
     cpub_bytes = c_eph_priv.public_key().public_bytes_raw()
-    send_frame(sock, {
+    cpub_msg = {
         "x25519_pub_b64": b64e(cpub_bytes),
-    })
+    }
+    send_frame(sock, cpub_msg)
     print("[+] Sent client ECDHE public key")
     spub_msg = recv_frame(sock)
     if spub_msg.get("type") != "Ysrv":
@@ -62,7 +64,7 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     # verify RSA-PSS(SHA256) over sha256(transcript)
     server_pub.verify(
         sig,
-        spub_msg,
+        canonical_json(spub_msg),
         padding.PSS(
             mgf=padding.MGF1(hashes.SHA256()),
             salt_length=padding.PSS.MAX_LENGTH,
@@ -75,7 +77,8 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     print("[+] Computed shared secret with ECDHE")
 
     # ============== Key Derivation ==============
-    transcript = spub.public_bytes() + cpub_bytes
+    msgs_for_transcript = [client_hello, cert, cpub_msg, spub_msg]
+    transcript = b"".join(canonical_json(m) for m in msgs_for_transcript)
     salt = sha256(transcript)
     session_id = sha256(b"DSS|SID|" + transcript)[:16]
 
@@ -86,8 +89,28 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     #TODO: rimuovere chiavi effimere
 
     # ============== Challenge Response ==============
+    ch = recv_frame(sock)
+    if ch.get("type") != "challenge":
+        raise ValueError("Expected challenge")
+    ch.pop("type")
+    tag = b64d(ch.pop("tag_b64", None))
+    if hmac_verify(HMAC_key, canonical_json(ch), tag) is False:
+        raise ValueError("Invalid HMAC on challenge")
     
+    ct = b64d(ch["ct_b64"])
+    iv = b64d(ch["iv_b64"])
+    timestamp = ch["timestamp"]
 
+    pt = _aes_cbc_decrypt(AES_key, iv, ct)
+    if pt != salt:
+        raise ValueError("Invalid challenge response plaintext")
+    
+    if abs(timestamp - time.time()) > DELTA_TIME:
+        raise ValueError("Challenge response timestamp out of range")
+
+    send_frame(sock, {"type": "response"})
+    print("[+] Challenge response verified")
+    print("[+] Handshake complete")
 
 
 def req(ch: SecureChannel, sock: socket.socket, op: str, **kwargs) -> dict:

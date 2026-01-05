@@ -141,6 +141,15 @@ def hmac_sha256(key: bytes, data: bytes) -> bytes:
     h.update(data)
     return h.finalize()
 
+def hmac_verify(key: bytes, data: bytes, tag: bytes) -> bool:
+    h = hmac.HMAC(key, hashes.SHA256())
+    h.update(data)
+    try:
+        h.verify(tag)
+        return True
+    except Exception:
+        return False
+
 
 @dataclass
 class ChannelKeysCBC:
