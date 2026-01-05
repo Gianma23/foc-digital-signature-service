@@ -279,6 +279,7 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
     sh_AES_key = hkdf_expand(shared, salt=th, info=b"DSS|AES", length=32)
     sh_HMAC_key = hkdf_expand(shared, salt=th, info=b"DSS|HMAC", length=32)
 
+    # ============== FinishedS ==============
     iv = os.urandom(16)
     timestamp = time.time()
     ct = _aes_cbc_encrypt(sh_AES_key, iv, th)
@@ -298,9 +299,27 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
         "tag_b64": b64e(tag_s)
     })
 
-    handshake_closure = recv_frame(sock)
-    if handshake_closure.get("type") != "response":
-        raise ValueError("Expected response")
+    # ============== FinishedC ==============
+    ch = recv_frame(sock)
+    if ch.get("type") != "challenge":
+        raise ValueError("Expected challenge")
+    ch.pop("type")
+    tag = b64d(ch.pop("tag_b64", None))
+    if hmac_verify(HMAC_key, canonical_json(ch), tag) is False:
+        raise ValueError("Invalid HMAC on challenge")
+    
+    ct = b64d(ch["ct_b64"])
+    iv = b64d(ch["iv_b64"])
+    timestamp = ch["timestamp"]
+
+    pt = _aes_cbc_decrypt(AES_key, iv, ct)
+    if pt != salt:
+        raise ValueError("Invalid challenge response plaintext")
+    
+    if abs(timestamp - time.time()) > DELTA_TIME:
+        raise ValueError("Challenge response timestamp out of range")
+
+    print("[+] Server Finished verified")
 
     # session_id = sha256(b"DSS|SID|" + transcript)[:16]
 
