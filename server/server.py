@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives import hashes, hmac
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
     sha256, hkdf_expand, SecureChannel, ChannelKeysCBC,
-    verify_password, hash_password, hmac_sha256
+    verify_password, hash_password, hmac_sha256, _aes_cbc_encrypt
 )
 
 BASE = Path(__file__).resolve().parent
@@ -279,12 +279,13 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
     msgs_for_transcript = [client_hello, s_cert, Y_client, s_pub]
     transcript = b"".join(canonical_json(m) for m in msgs_for_transcript)
     th = sha256(transcript)
-    sh_AES_key = hkdf_expand(shared, salt=transcript, info=b"DSS|SHARED|AES", length=32)
-    sh_HMAC_key = hkdf_expand(shared, salt=transcript, info=b"DSS|SHARED|HMAC", length=32)
+    sh_AES_key = hkdf_expand(shared, salt=th, info=b"DSS|SHARED|AES", length=32)
+    sh_HMAC_key = hkdf_expand(shared, salt=th, info=b"DSS|SHARED|HMAC", length=32)
 
     iv = os.urandom(16)
     timestamp = time.time()
-    ct = AESCBC(sh_AES_key, iv, transcript)
+    ct = _aes_cbc_encrypt(sh_AES_key, iv, th)
+
     content = canonical_json({
         "ct_b64": b64e(ct),
         "timestamp": timestamp,
@@ -299,6 +300,10 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
         "iv_b64": b64e(iv),
         "hmac_b64": b64e(tag_s)
     })
+
+    handshake_closure = recv_frame(sock)
+    if handshake_closure.get("type") != "response":
+        raise ValueError("Expected response")
 
     # session_id = sha256(b"DSS|SID|" + transcript)[:16]
 
