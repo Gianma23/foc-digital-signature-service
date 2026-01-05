@@ -2,7 +2,7 @@ import base64
 import os
 import socket
 from pathlib import Path
-
+from .config import HOST, PORT, SERVER_PUBKEY_PATH
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
 from common import ChannelKeysCBC
@@ -11,12 +11,6 @@ from common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
     sha256, hkdf_expand, SecureChannel, ChannelKeys
 )
-
-HOST = "127.0.0.1"
-PORT = 5050
-
-BASE = Path(__file__).resolve().parent
-SERVER_PUBKEY_PATH = BASE / "server_data" / "keys" / "dss_rsa_public.pem"
 
 
 def load_server_pubkey() -> rsa.RSAPublicKey:
@@ -30,16 +24,33 @@ def load_server_pubkey() -> rsa.RSAPublicKey:
 
 
 def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureChannel:
+
+    # ============== Server authentication with certificate ==============
+    client_hello = {
+        "type": "hello"
+    }
+    send_frame(sock, client_hello)
+    cert = recv_frame(sock)
+    if cert.get("type") != "certS":
+        raise ValueError("Expected certS")
+
+    server_pub_pem = b64d(cert["rsa_pub_pem_b64"])
+    server_pub = serialization.load_pem_public_key(server_pub_pem)
+
+    pinned_pem = server_pub.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    if server_pub_pem != pinned_pem:
+        raise ValueError("Server certificate/public key not trusted")
+
+    # ============== ECDHE ==============
     c_eph_priv = x25519.X25519PrivateKey.generate()
     cpub_bytes = c_eph_priv.public_key().public_bytes(
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
     )
-
     client_hello = {
-        "type": "client_hello",
-        "ver": 1,
-        "client_random_b64": b64e(os.urandom(32)),
         "x25519_pub_b64": b64e(cpub_bytes),
     }
     send_frame(sock, client_hello)
@@ -71,7 +82,7 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     salt = sha256(transcript)
     session_id = sha256(b"DSS|SID|" + transcript)[:16]
 
-    cc2s_enc = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|ENC", length=32)
+    c2s_enc = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|ENC", length=32)
     c2s_mac = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|MAC", length=32)
     c2s_iv  = hkdf_expand(shared, salt=salt, info=b"DSS|C2S|IV",  length=16)
 
