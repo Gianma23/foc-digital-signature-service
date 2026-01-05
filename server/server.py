@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives import hashes, hmac
 
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
-    sha256, hkdf_expand, SecureChannel, ChannelKeysCBC,
+    sha256, hkdf_expand, SecureChannel,
     verify_password, hash_password, hmac_sha256, _aes_cbc_encrypt,
     hmac_verify, _aes_cbc_decrypt
 )

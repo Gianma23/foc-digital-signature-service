@@ -6,7 +6,7 @@ import time
 from .config import HOST, PORT, SERVER_PUBKEY_PATH, DELTA_TIME
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
-from shared.common import ChannelKeysCBC, _aes_cbc_encrypt, hmac_sha256
+from shared.common import _aes_cbc_encrypt, hmac_sha256
 
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,

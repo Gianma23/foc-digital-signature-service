@@ -7,8 +7,6 @@ import socket
 import struct
 from dataclasses import dataclass
 
-from shared.common import DELTA_TIME
-
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -17,6 +15,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding as sympadding
 from cryptography.hazmat.primitives.constant_time import bytes_eq
 
+DELTA_TIME = 2 * 60
 
 # -----------------------------
 # Framing: 4-byte length + JSON
