@@ -88,7 +88,7 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     print("[+] Computed session keys with HKDF")
     #TODO: rimuovere chiavi effimere
 
-    # ============== Challenge Response ==============
+    # ============== FinishedS ==============
     ch = recv_frame(sock)
     if ch.get("type") != "challenge":
         raise ValueError("Expected challenge")
@@ -108,8 +108,29 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     if abs(timestamp - time.time()) > DELTA_TIME:
         raise ValueError("Challenge response timestamp out of range")
 
-    send_frame(sock, {"type": "response"})
-    print("[+] Challenge response verified")
+    print("[+] Server Finished verified")
+    
+    # ============== FinishedC ==============
+    iv = os.urandom(16)
+    timestamp = time.time()
+    ct = _aes_cbc_encrypt(sh_AES_key, iv, th)
+
+    content = canonical_json({
+        "ct_b64": b64e(ct),
+        "timestamp": timestamp,
+        "iv_b64": b64e(iv),
+    })
+    tag_s = hmac_sha256(sh_HMAC_key, content)
+
+    send_frame(sock, {
+        "type": "challenge",
+        "ct_b64": b64e(ct),
+        "timestamp": timestamp,
+        "iv_b64": b64e(iv),
+        "tag_b64": b64e(tag_s)
+    })
+
+    print("[+] Client Finished verified")
     print("[+] Handshake complete")
 
 
