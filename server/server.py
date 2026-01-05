@@ -322,51 +322,62 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
         raise ValueError("Challenge response timestamp out of range")
 
     print("[+] Server Finished verified")
-
     print("[+] Handshake complete")
-    return None
+
+    session_id = sha256(b"DSS|SID|" + th)[:16]
+
+    return SecureChannel(
+        session_id=session_id,
+        AES_key=sh_AES_key,
+        HMAC_key=sh_HMAC_key
+    )
+
+def login(conn: socket.socket, ch: SecureChannel) -> str:
+    outer = recv_frame(conn)
+    auth = ch.channel_receive(outer)
+    if auth.get("type") != "auth":
+        return None
+
+    username = auth.get("username", "")
+    password = auth.get("password", "")
+    new_password = auth.get("new_password")
+
+    db = load_db()
+    user = get_user(db, username)
+    if not user:
+        send_frame(conn, ch.channel_send({"ok": False, "err": "Unknown user"}))
+        return None
+ 
+    salt = b64d(user["pw_salt_b64"])
+    pw_hash = b64d(user["pw_hash_b64"])
+    if not verify_password(password, salt, pw_hash):
+        send_frame(conn, ch.channel_send({"ok": False, "err": "Bad credentials"}))
+        return None
+
+    if user.get("first_login", False):
+        if not new_password:
+            send_frame(conn, ch.channel_send({"ok": False, "err": "Password must be changed at first login"}))
+            return None
+        nsalt, nhash = hash_password(new_password)
+        user["pw_salt_b64"] = b64e(nsalt)
+        user["pw_hash_b64"] = b64e(nhash)
+        user["first_login"] = False
+        save_db(db)
+
+    send_frame(conn, ch.channel_send({"ok": True, "msg": "Authenticated"}))
+    return username
 
 
 def handle_client(conn: socket.socket, addr, dss_priv, master_key):
     try:
         ch = handshake(conn, dss_priv)
-
-        outer = recv_frame(conn)
-        auth = ch.decrypt_c2s(outer)
-        if auth.get("type") != "auth":
-            raise ValueError("Expected auth message")
-
-        username = auth.get("username", "")
-        password = auth.get("password", "")
-        new_password = auth.get("new_password")
-
-        db = load_db()
-        u = get_user(db, username)
-        if not u or not u.get("active", False):
-            send_frame(conn, ch.encrypt_s2c({"type": "auth_resp", "ok": False, "err": "Unknown/inactive user"}))
-            return
-
-        salt = b64d(u["pw_salt_b64"])
-        pw_hash = b64d(u["pw_hash_b64"])
-        if not verify_password(password, salt, pw_hash):
-            send_frame(conn, ch.encrypt_s2c({"type": "auth_resp", "ok": False, "err": "Bad credentials"}))
-            return
-
-        if u.get("first_login", False):
-            if not new_password:
-                send_frame(conn, ch.encrypt_s2c({"type": "auth_resp", "ok": False, "err": "Password must be changed at first login"}))
-                return
-            nsalt, nhash = hash_password(new_password)
-            u["pw_salt_b64"] = b64e(nsalt)
-            u["pw_hash_b64"] = b64e(nhash)
-            u["first_login"] = False
-            save_db(db)
-
-        send_frame(conn, ch.encrypt_s2c({"type": "auth_resp", "ok": True, "msg": "Authenticated"}))
+        username = login(conn, ch)
+        if not username:
+            raise ValueError("Authentication failed")
 
         while True:
             outer = recv_frame(conn)
-            req = ch.decrypt_c2s(outer)
+            req = ch.channel_receive(outer)
             if req.get("type") != "req":
                 raise ValueError("Expected req")
 
