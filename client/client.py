@@ -6,7 +6,7 @@ import time
 from .config import HOST, PORT, SERVER_PUBKEY_PATH, DELTA_TIME
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
-from shared.common import ChannelKeysCBC
+from shared.common import ChannelKeysCBC, _aes_cbc_encrypt, hmac_sha256
 
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
@@ -113,14 +113,14 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     # ============== FinishedC ==============
     iv = os.urandom(16)
     timestamp = time.time()
-    ct = _aes_cbc_encrypt(sh_AES_key, iv, th)
+    ct = _aes_cbc_encrypt(AES_key, iv, salt)
 
     content = canonical_json({
         "ct_b64": b64e(ct),
         "timestamp": timestamp,
         "iv_b64": b64e(iv),
     })
-    tag_s = hmac_sha256(sh_HMAC_key, content)
+    tag_s = hmac_sha256(HMAC_key, content)
 
     send_frame(sock, {
         "type": "challenge",
