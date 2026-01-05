@@ -3,10 +3,12 @@ import os
 import socket
 import threading
 from pathlib import Path
+import time
 
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.ciphers.aead import AESCBC
+from cryptography.hazmat.primitives import hashes, HMAC
 
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
@@ -236,12 +238,13 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
     encoding=serialization.Encoding.PEM,
     format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
-    send_frame(sock, {
+    s_cert = {
         "type": "certS",
         "rsa_pub_pem_b64": b64e(pub_pem),
         "sig_scheme": "RSA-PSS-SHA256",
         "dh_group": "RFC3526-group14-2048",
-    })
+    }
+    send_frame(sock, s_cert)
 
     Y_client = recv_frame(sock)
     c_pub = x25519.X25519PublicKey.from_public_bytes(b64d(Y_client["x25519_pub_b64"]))
@@ -256,7 +259,7 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
     }
 
     sig = dss_priv.sign(
-        s_pub,
+        canonical_json(s_pub),
         padding.PSS(
             mgf=padding.MGF1(hashes.SHA256()),
             salt_length=padding.PSS.MAX_LENGTH,
@@ -272,10 +275,30 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
 
     shared = s_priv_eph.exchange(c_pub)
 
-    salt = sha256(c_pub.public_bytes() + s_pub_bytes)
+    s_pub.pop("sig_b64", None)
+    msgs_for_transcript = [client_hello, s_cert, Y_client, s_pub]
+    transcript = b"".join(canonical_json(m) for m in msgs_for_transcript)
+    th = sha256(transcript)
+    sh_AES_key = hkdf_expand(shared, salt=transcript, info=b"DSS|SHARED|AES", length=32)
+    sh_HMAC_key = hkdf_expand(shared, salt=transcript, info=b"DSS|SHARED|HMAC", length=32)
 
-    sh_AES_key = hkdf_expand(shared, salt=salt, info=b"DSS|SHARED|AES", length=32)
-    sh_HMAC_key = hkdf_expand(shared, salt=salt, info=b"DSS|SHARED|HMAC", length=32)
+    iv = os.urandom(16)
+    timestamp = time.time()
+    ct = AESCBC(sh_AES_key, iv, transcript)
+    content = canonical_json({
+        "ct": b64e(ct),
+        "timestamp": timestamp,
+        "iv_b64": b64e(iv),
+    })
+    tag_s = HMAC(sh_HMAC_key, content)
+
+    send_frame(sock, {
+        "type": "challenge",
+        "ciphertext_b64": b64e(ct),
+        "timestamp": timestamp,
+        "iv_b64": b64e(iv),
+        "hmac_b64": b64e(tag_s)
+    })
 
     # session_id = sha256(b"DSS|SID|" + transcript)[:16]
 
