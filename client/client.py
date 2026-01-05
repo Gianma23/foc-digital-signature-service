@@ -133,12 +133,20 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     print("[+] Client Finished verified")
     print("[+] Handshake complete")
 
+    session_id = sha256(b"DSS|SID|" + salt)[:16]
+    return SecureChannel(
+        session_id=session_id,
+        AES_key=AES_key,
+        HMAC_key=HMAC_key,
+    )
+ 
+
 
 def req(ch: SecureChannel, sock: socket.socket, op: str, **kwargs) -> dict:
     inner = {"type": "req", "op": op, **kwargs}
-    send_frame(sock, ch.encrypt_c2s(inner))
+    send_frame(sock, ch.channel_send(inner))
     outer = recv_frame(sock)
-    return ch.decrypt_s2c(outer)
+    return ch.channel_receive(outer)
 
 
 def main():
@@ -157,13 +165,13 @@ def main():
         if new_password:
             auth_inner["new_password"] = new_password
 
-        send_frame(sock, ch.encrypt_c2s(auth_inner))
-        auth_resp = ch.decrypt_s2c(recv_frame(sock))
+        send_frame(sock, ch.channel_send(auth_inner))
+        auth_resp = ch.channel_receive(recv_frame(sock))
         print("[auth]", auth_resp)
         if not auth_resp.get("ok"):
-            return
+            raise ValueError("Authentication failed")
 
-        print("Commands: ping | createkeys | getpub <user> | signdoc <path> | deletekeys | quit")
+        print("Commands: createkeys | deletekeys | getpub <user> | signdoc <path> | quit")
         while True:
             line = input("dss> ").strip()
             if not line:
@@ -171,11 +179,11 @@ def main():
             parts = line.split()
             cmd = parts[0].lower()
 
-            if cmd == "ping":
-                print(req(ch, sock, "Ping"))
-
-            elif cmd == "createkeys":
+            if cmd == "createkeys":
                 print(req(ch, sock, "CreateKeys"))
+
+            elif cmd == "deletekeys":
+                print(req(ch, sock, "DeleteKeys"))
 
             elif cmd == "getpub":
                 if len(parts) != 2:
@@ -191,9 +199,6 @@ def main():
                 data = p.read_bytes()
                 doc_b64 = base64.b64encode(data).decode("ascii")
                 print(req(ch, sock, "SignDoc", doc_b64=doc_b64))
-
-            elif cmd == "deletekeys":
-                print(req(ch, sock, "DeleteKeys"))
 
             elif cmd == "quit":
                 print(req(ch, sock, "Quit"))
