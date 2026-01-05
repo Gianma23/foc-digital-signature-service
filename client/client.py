@@ -85,7 +85,7 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
     AES_key = hkdf_expand(shared, salt=salt, info=b"DSS|AES", length=32)
     HMAC_key = hkdf_expand(shared, salt=salt, info=b"DSS|HMAC", length=32)
 
-    print("[+] Computed shared secret with ECDHE")
+    print("[+] Computed session keys with HKDF")
     #TODO: rimuovere chiavi effimere
 
     # ============== Challenge Response ==============

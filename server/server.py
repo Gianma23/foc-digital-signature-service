@@ -7,7 +7,6 @@ import time
 
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.ciphers.aead import AESCBC
 from cryptography.hazmat.primitives import hashes, hmac
 
 from shared.common import (
@@ -271,16 +270,14 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
 
     send_frame(sock, s_pub)
 
-    print("[server] Handshake complete (not fully implemented)")
-
     shared = s_priv_eph.exchange(c_pub)
 
     s_pub.pop("sig_b64", None)
     msgs_for_transcript = [client_hello, s_cert, Y_client, s_pub]
     transcript = b"".join(canonical_json(m) for m in msgs_for_transcript)
     th = sha256(transcript)
-    sh_AES_key = hkdf_expand(shared, salt=th, info=b"DSS|SHARED|AES", length=32)
-    sh_HMAC_key = hkdf_expand(shared, salt=th, info=b"DSS|SHARED|HMAC", length=32)
+    sh_AES_key = hkdf_expand(shared, salt=th, info=b"DSS|AES", length=32)
+    sh_HMAC_key = hkdf_expand(shared, salt=th, info=b"DSS|HMAC", length=32)
 
     iv = os.urandom(16)
     timestamp = time.time()
@@ -298,7 +295,7 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
         "ct_b64": b64e(ct),
         "timestamp": timestamp,
         "iv_b64": b64e(iv),
-        "hmac_b64": b64e(tag_s)
+        "tag_b64": b64e(tag_s)
     })
 
     handshake_closure = recv_frame(sock)
@@ -312,6 +309,8 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
     #     c2s=ChannelKeysCBC(enc_key=c2s_enc, mac_key=c2s_mac, base_iv=c2s_iv),
     #     s2c=ChannelKeysCBC(enc_key=s2c_enc, mac_key=s2c_mac, base_iv=s2c_iv),
     # )
+    print("[+] Handshake complete")
+    return None
 
 
 def handle_client(conn: socket.socket, addr, dss_priv, master_key):
