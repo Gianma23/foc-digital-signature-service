@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding as sympadding
@@ -81,22 +81,28 @@ def sha256(data: bytes) -> bytes:
 def hash_password(password: str, salt: bytes | None = None) -> tuple[bytes, bytes]:
     if salt is None:
         salt = os.urandom(16)
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
+    kdf = Argon2id(
         salt=salt,
-        iterations=200_000,
+        length=32,
+        iterations=1,
+        lanes=4,
+        memory_cost=2**21,
+        ad=None,
+        secret=None,
     )
     pw_hash = kdf.derive(password.encode("utf-8"))
     return salt, pw_hash
 
 
 def verify_password(password: str, salt: bytes, pw_hash: bytes) -> bool:
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
+    kdf = Argon2id(
         salt=salt,
-        iterations=200_000,
+        length=32,
+        iterations=1,
+        lanes=4,
+        memory_cost=2**21,
+        ad=None,
+        secret=None,
     )
     try:
         kdf.verify(password.encode("utf-8"), pw_hash)
