@@ -21,7 +21,6 @@ from shared.common import (
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "server_data"
 KEYS_DIR = DATA_DIR / "keys"
-DB_PATH = DATA_DIR / "users.json"
 DELTA_TIME = 2 * 60  
 
 HOST = "127.0.0.1"
