@@ -139,7 +139,6 @@ def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureCha
         AES_key=AES_key,
         HMAC_key=HMAC_key,
     )
- 
 
 
 def req(ch: SecureChannel, sock: socket.socket, op: str, **kwargs) -> dict:

@@ -5,6 +5,8 @@ import threading
 from pathlib import Path
 import time
 
+from .db import load_db, save_db, get_user
+
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives import hashes, hmac
@@ -79,23 +81,6 @@ def load_or_create_master_key() -> bytes:
     mk_path.write_bytes(mk)
     print(f"[server] Created master key in {mk_path} (keep it secret!)")
     return mk
-
-
-# -----------------------------
-# DB helpers
-# -----------------------------
-def load_db() -> dict:
-    if not DB_PATH.exists():
-        return {"users": {}}
-    return json.loads(DB_PATH.read_text(encoding="utf-8"))
-
-
-def save_db(db: dict) -> None:
-    DB_PATH.write_text(json.dumps(db, indent=2, sort_keys=True), encoding="utf-8")
-
-
-def get_user(db: dict, username: str) -> dict | None:
-    return db["users"].get(username)
 
 
 # -----------------------------
