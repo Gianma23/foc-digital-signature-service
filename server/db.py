@@ -20,3 +20,17 @@ def save_db(db: dict) -> None:
 
 def get_user(db: dict, username: str) -> dict | None:
     return db["users"].get(username)
+
+
+def remove_user(db: dict, username: str) -> dict:
+    users = db["users"]
+
+    if username not in users:
+        return {"ok": False, "err": "User not found"}
+
+    # delete user entry
+    del users[username]
+
+    # persist
+    save_db(db)
+    return {"ok": True, "msg": f"User '{username}' removed"}
