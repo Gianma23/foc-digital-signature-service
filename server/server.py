@@ -338,7 +338,7 @@ def login(conn: socket.socket, ch: SecureChannel) -> str:
         send_frame(conn, ch.channel_send({"ok": False, "err": "Bad credentials"}))
         return None
 
-    if user.get("first_login", False):
+    if user.get("first_login", True):
         if not new_password:
             send_frame(conn, ch.channel_send({"ok": False, "err": "Password must be changed at first login"}))
             return None
