@@ -17,12 +17,10 @@ def register_user(username: str, temp_password: str | None = None):
     salt, pw_hash = hash_password(temp_password)
 
     db["users"][username] = {
-        "active": True,
         "first_login": True,
-        "blocked_after_delete": False,
         "pw_salt_b64": b64e(salt),
         "pw_hash_b64": b64e(pw_hash),
-        # "user_keys": ... created later
+        # "user_keys": created with CreateKeys
     }
     save_db(db)
     print(f"Registered user '{username}'. Temporary password: {temp_password}")
