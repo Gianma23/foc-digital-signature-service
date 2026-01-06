@@ -73,7 +73,12 @@ def load_or_create_server_disk_key(dss_priv: rsa.RSAPrivateKey) -> bytes:
         return key_path.read_bytes()
 
     salt = os.urandom(16)  
-    key = hkdf_expand(dss_priv.private_bytes(), salt=salt, info=b"Keys encryption on disk", length=32)
+    key = hkdf_expand(
+        dss_priv.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ), salt=salt, info=b"Keys encryption on disk", length=32)
     key_path.write_bytes(key)
     print(f"[server] Created disk AES-XTS key in {key_path}")
     return key
