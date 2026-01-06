@@ -103,7 +103,8 @@ def op_create_keys(db: dict, disk_key: bytes, username: str) -> dict:
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    cipher = Cipher(algorithms.AES(disk_key), modes.XTS())
+    tweak = sha256(username.encode("utf-8"))[:16]
+    cipher = Cipher(algorithms.AES(disk_key), modes.XTS(tweak))
     enc = cipher.encryptor()
     ct = enc.update(priv_bytes) + enc.finalize()
 
