@@ -66,11 +66,23 @@ def load_or_create_server_signing_key() -> rsa.RSAPrivateKey:
     print(f"[server] Distribute public key to users offline: {pub_path}")
     return priv
 
+def load_or_create_server_disk_key(dss_priv: rsa.RSAPrivateKey) -> bytes:
+    key_path = KEYS_DIR / "disk_key.bin"
+
+    if key_path.exists():
+        return key_path.read_bytes()
+
+    salt = os.urandom(16)  
+    key = hkdf_expand(dss_priv.private_bytes(), salt=salt, info=b"Keys encryption on disk", length=32)
+    key_path.write_bytes(key)
+    print(f"[server] Created disk AES-XTS key in {key_path}")
+    return key
+
 
 # -----------------------------
 # DSS operations (RSA user keys)
 # -----------------------------
-def op_create_keys(db: dict, dss_priv: rsa.RSAPrivateKey, username: str) -> dict:
+def op_create_keys(db: dict, disk_key: bytes, username: str) -> dict:
     u = get_user(db, username)
     if not u :
         return {"ok": False, "err": "User not found"}
@@ -91,7 +103,7 @@ def op_create_keys(db: dict, dss_priv: rsa.RSAPrivateKey, username: str) -> dict
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    cipher = Cipher(algorithms.AES(dss_priv), modes.XTS())
+    cipher = Cipher(algorithms.AES(disk_key), modes.XTS())
     enc = cipher.encryptor()
     ct = enc.update(priv_bytes) + enc.finalize()
 
@@ -319,7 +331,7 @@ def login(conn: socket.socket, ch: SecureChannel) -> str:
     return username
 
 
-def handle_client(conn: socket.socket, addr, dss_priv):
+def handle_client(conn: socket.socket, addr, dss_priv, disk_key: bytes):
     try:
         ch = handshake(conn, dss_priv)
         username = login(conn, ch)
@@ -336,7 +348,7 @@ def handle_client(conn: socket.socket, addr, dss_priv):
 
             if op == "CreateKeys":
                 db = load_db()
-                resp = op_create_keys(db, dss_priv, username)
+                resp = op_create_keys(db, disk_key, username)
 
             elif op == "GetPublicKey":
                 db = load_db()
@@ -374,6 +386,7 @@ def handle_client(conn: socket.socket, addr, dss_priv):
 def main():
     ensure_dirs()
     dss_priv = load_or_create_server_signing_key()
+    disk_key = load_or_create_server_disk_key(dss_priv)
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -385,7 +398,7 @@ def main():
             conn, addr = s.accept()
             t = threading.Thread(
                 target=handle_client,
-                args=(conn, addr, dss_priv),
+                args=(conn, addr, dss_priv, disk_key),
                 daemon=True,
             )
             t.start()
