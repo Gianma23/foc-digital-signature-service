@@ -161,13 +161,12 @@ def op_sign_doc(db: dict, master_key: bytes, username: str, doc_b64: str) -> dic
 
 def op_delete_keys(db: dict, username: str) -> dict:
     u = get_user(db, username)
-    if not u or not u.get("active", False):
-        return {"ok": False, "err": "User not registered/active"}
-
-    u.pop("user_keys", None)
-    u["blocked_after_delete"] = True
+    if not u :
+        return {"ok": False, "err": "User not found"}
+    
+    db.pop(username, None)
     save_db(db)
-    return {"ok": True, "msg": "Keypair deleted; user blocked until offline re-registered"}
+    return {"ok": True, "msg": "Keypair deleted; user removed until offline re-registered"}
 
 
 # -----------------------------
