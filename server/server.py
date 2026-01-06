@@ -372,13 +372,13 @@ def handle_client(conn: socket.socket, addr, dss_priv, disk_key: bytes):
 
             elif op == "Quit":
                 resp = {"ok": True, "msg": "Bye"}
-                send_frame(conn, ch.encrypt_s2c({"type": "resp", "op": op, **resp}))
+                send_frame(conn, ch.channel_send({"type": "resp", "op": op, **resp}))
                 break
 
             else:
                 resp = {"ok": False, "err": f"Unknown op: {op}"}
 
-            send_frame(conn, ch.encrypt_s2c({"type": "resp", "op": op, **resp}))
+            send_frame(conn, ch.channel_send({"type": "resp", "op": op, **resp}))
 
     except Exception as e:
         print(f"[server] client {addr} error: {e}")
