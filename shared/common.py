@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding as sympadding
 from cryptography.hazmat.primitives.constant_time import bytes_eq
+from cryptography.hazmat.primitives.ciphers.modes import XTS
 
 DELTA_TIME = 2 * 60
 

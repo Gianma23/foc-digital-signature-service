@@ -10,6 +10,7 @@ from .db import load_db, save_db, get_user
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
@@ -26,7 +27,7 @@ DELTA_TIME = 2 * 60
 HOST = "127.0.0.1"
 PORT = 5050
 
-RSA_KEY_SIZE = 2048  # puoi mettere 3072 se vuoi
+RSA_KEY_SIZE = 2048  
 
 
 def ensure_dirs():
@@ -66,51 +67,13 @@ def load_or_create_server_signing_key() -> rsa.RSAPrivateKey:
     return priv
 
 
-def load_or_create_master_key() -> bytes:
-    mk_path = KEYS_DIR / "master_key.bin"
-    env = os.environ.get("DSS_MASTER_KEY_B64")
-    if env:
-        import base64
-        return base64.b64decode(env.encode("ascii"))
-
-    if mk_path.exists():
-        return mk_path.read_bytes()
-
-    mk = os.urandom(32)
-    mk_path.write_bytes(mk)
-    print(f"[server] Created master key in {mk_path} (keep it secret!)")
-    return mk
-
-
-# -----------------------------
-# Key-at-rest encryption
-# -----------------------------
-def user_wrap_key(master_key: bytes, username: str) -> bytes:
-    salt = sha256(username.encode("utf-8"))
-    return hkdf_expand(master_key, salt=salt, info=b"DSS|USERKEYWRAP", length=32)
-
-
-def encrypt_at_rest(master_key: bytes, username: str, plaintext: bytes) -> tuple[bytes, bytes]:
-    k = user_wrap_key(master_key, username)
-    nonce = os.urandom(12)
-    ct = AESGCM(k).encrypt(nonce, plaintext, b"DSS|ATREST|" + username.encode("utf-8"))
-    return nonce, ct
-
-
-def decrypt_at_rest(master_key: bytes, username: str, nonce: bytes, ciphertext: bytes) -> bytes:
-    k = user_wrap_key(master_key, username)
-    return AESGCM(k).decrypt(nonce, ciphertext, b"DSS|ATREST|" + username.encode("utf-8"))
-
-
 # -----------------------------
 # DSS operations (RSA user keys)
 # -----------------------------
-def op_create_keys(db: dict, master_key: bytes, username: str) -> dict:
+def op_create_keys(db: dict, dss_priv: rsa.RSAPrivateKey, username: str) -> dict:
     u = get_user(db, username)
-    if not u or not u.get("active", False):
-        return {"ok": False, "err": "User not registered/active"}
-    if u.get("blocked_after_delete", False):
-        return {"ok": False, "err": "Keys were deleted; user must be offline re-registered"}
+    if not u :
+        return {"ok": False, "err": "User not found"}
 
     if u.get("user_keys"):
         return {"ok": True, "msg": "Keypair already exists (no-op)"}
@@ -128,11 +91,12 @@ def op_create_keys(db: dict, master_key: bytes, username: str) -> dict:
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    nonce, ct = encrypt_at_rest(master_key, username, priv_bytes)
+    cipher = Cipher(algorithms.AES(dss_priv), modes.XTS())
+    enc = cipher.encryptor()
+    ct = enc.update(priv_bytes) + enc.finalize()
 
     u["user_keys"] = {
         "pub_pem_b64": b64e(pub_bytes),
-        "priv_nonce_b64": b64e(nonce),
         "priv_ct_b64": b64e(ct),
         "alg": f"RSA-{RSA_KEY_SIZE}",
         "sig_scheme": "RSASSA-PSS-SHA256",
@@ -355,7 +319,7 @@ def login(conn: socket.socket, ch: SecureChannel) -> str:
     return username
 
 
-def handle_client(conn: socket.socket, addr, dss_priv, master_key):
+def handle_client(conn: socket.socket, addr, dss_priv):
     try:
         ch = handshake(conn, dss_priv)
         username = login(conn, ch)
@@ -372,7 +336,7 @@ def handle_client(conn: socket.socket, addr, dss_priv, master_key):
 
             if op == "CreateKeys":
                 db = load_db()
-                resp = op_create_keys(db, master_key, username)
+                resp = op_create_keys(db, dss_priv, username)
 
             elif op == "GetPublicKey":
                 db = load_db()
@@ -410,7 +374,6 @@ def handle_client(conn: socket.socket, addr, dss_priv, master_key):
 def main():
     ensure_dirs()
     dss_priv = load_or_create_server_signing_key()
-    master_key = load_or_create_master_key()
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -422,7 +385,7 @@ def main():
             conn, addr = s.accept()
             t = threading.Thread(
                 target=handle_client,
-                args=(conn, addr, dss_priv, master_key),
+                args=(conn, addr, dss_priv),
                 daemon=True,
             )
             t.start()
