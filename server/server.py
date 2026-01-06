@@ -135,17 +135,17 @@ def op_get_public_key(db: dict, target_user: str) -> dict:
     }
 
 
-def op_sign_doc(db: dict, master_key: bytes, username: str, doc_b64: str) -> dict:
+def op_sign_doc(db: dict, disk_key: bytes, username: str, doc_b64: str) -> dict:
     u = get_user(db, username)
     if not u or not u.get("user_keys"):
         return {"ok": False, "err": "No keypair for invoking user"}
 
-    uk = u["user_keys"]
-    nonce = b64d(uk["priv_nonce_b64"])
-    ct = b64d(uk["priv_ct_b64"])
-    priv_pem = decrypt_at_rest(master_key, username, nonce, ct)
-
-    priv = serialization.load_pem_private_key(priv_pem, password=None)
+    u_keys = u["user_keys"]
+    tweak = sha256(username.encode("utf-8"))[:16]
+    cipher = Cipher(algorithms.AES(disk_key), modes.XTS(tweak))
+    dec = cipher.decryptor()
+    priv_bytes = dec.update(b64d(u_keys["priv_ct_b64"])) + dec.finalize()
+    priv = serialization.load_pem_private_key(priv_bytes.read_bytes(), password=None)
 
     doc = b64d(doc_b64)
     sig = priv.sign(
@@ -156,7 +156,12 @@ def op_sign_doc(db: dict, master_key: bytes, username: str, doc_b64: str) -> dic
         ),
         hashes.SHA256(),
     )
-    return {"ok": True, "signature_b64": b64e(sig), "alg": uk["alg"], "sig_scheme": uk["sig_scheme"]}
+    return {
+        "ok": True, 
+        "signature_b64": b64e(sig), 
+        "alg": u_keys["alg"], 
+        "sig_scheme": u_keys["sig_scheme"]
+    }
 
 
 def op_delete_keys(db: dict, username: str) -> dict:
@@ -362,7 +367,7 @@ def handle_client(conn: socket.socket, addr, dss_priv, disk_key: bytes):
             elif op == "SignDoc":
                 db = load_db()
                 doc_b64 = req.get("doc_b64", "")
-                resp = op_sign_doc(db, master_key, username, doc_b64)
+                resp = op_sign_doc(db, disk_key, username, doc_b64)
 
             elif op == "DeleteKeys":
                 db = load_db()
