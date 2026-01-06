@@ -5,7 +5,7 @@ import threading
 from pathlib import Path
 import time
 
-from .db import load_db, save_db, get_user
+from .db import load_db, save_db, get_user, remove_user
 
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
@@ -164,9 +164,8 @@ def op_delete_keys(db: dict, username: str) -> dict:
     if not u :
         return {"ok": False, "err": "User not found"}
     
-    db.pop(username, None)
-    save_db(db)
-    return {"ok": True, "msg": "Keypair deleted; user removed until offline re-registered"}
+    msg = remove_user(db, username)
+    return {"ok": True, "msg": msg}
 
 
 # -----------------------------
