@@ -329,18 +329,21 @@ def login(conn: socket.socket, ch: SecureChannel) -> str:
     db = load_db()
     user = get_user(db, username)
     if not user:
-        send_frame(conn, ch.channel_send({"ok": False, "err": "Unknown user"}))
+        send_frame(conn, ch.channel_send({"ok": False, "err": "Authentication failed"}))
+        print(f"[server] Unknown user login attempt: {username}")
         return None
  
     salt = b64d(user["pw_salt_b64"])
     pw_hash = b64d(user["pw_hash_b64"])
     if not verify_password(password, salt, pw_hash):
-        send_frame(conn, ch.channel_send({"ok": False, "err": "Bad credentials"}))
+        send_frame(conn, ch.channel_send({"ok": False, "err": "Authentication failed"}))
+        print(f"[server] Bad password for user: {username}")
         return None
 
     if user.get("first_login", True):
-        if not new_password:
-            send_frame(conn, ch.channel_send({"ok": False, "err": "Password must be changed at first login"}))
+        if not new_password or new_password.strip() == "" or new_password == password:
+            send_frame(conn, ch.channel_send({"ok": False, "err": "Authentication failed"}))
+            print(f"[server] User {username} must change password at first login")
             return None
         nsalt, nhash = hash_password(new_password)
         user["pw_salt_b64"] = b64e(nsalt)
@@ -366,10 +369,8 @@ def handle_client(conn: socket.socket, addr, dss_priv, master_key):
                 raise ValueError("Expected req")
 
             op = req.get("op")
-            if op == "Ping":
-                resp = {"ok": True, "pong": True}
 
-            elif op == "CreateKeys":
+            if op == "CreateKeys":
                 db = load_db()
                 resp = op_create_keys(db, master_key, username)
 
