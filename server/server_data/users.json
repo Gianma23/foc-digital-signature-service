@@ -1,9 +1,9 @@
 {
   "users": {
     "Gianma": {
-      "first_login": true,
-      "pw_hash_b64": "EDztUiWOGANOBg3VhtnwTS+6NBFc+ST5NqOrp2rXX20=",
-      "pw_salt_b64": "ctBb7srQT+kxU2zFveKwtA=="
+      "first_login": false,
+      "pw_hash_b64": "vUopag9A6eOXi05WGN7JEy45T08oRhZ0a8V01rjn+5o=",
+      "pw_salt_b64": "zwH+hD49MCca5kl6Kn790A=="
     }
   }
 }
