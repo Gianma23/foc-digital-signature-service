@@ -145,7 +145,7 @@ def op_sign_doc(db: dict, disk_key: bytes, username: str, doc_b64: str) -> dict:
     cipher = Cipher(algorithms.AES(disk_key), modes.XTS(tweak))
     dec = cipher.decryptor()
     priv_bytes = dec.update(b64d(u_keys["priv_ct_b64"])) + dec.finalize()
-    priv = serialization.load_pem_private_key(priv_bytes.read_bytes(), password=None)
+    priv = serialization.load_pem_private_key(priv_bytes, password=None)
 
     doc = b64d(doc_b64)
     sig = priv.sign(
