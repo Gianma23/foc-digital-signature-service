@@ -3,10 +3,11 @@ import os
 import socket
 from pathlib import Path
 import time
-from .config import HOST, PORT, SERVER_PUBKEY_PATH, DELTA_TIME
+from .config import HOST, PORT, SERVER_PUBKEY_PATH, DELTA_TIME, PUBKEYS_DIR, SIGS_DIR, DOCS_DIR
 from cryptography.hazmat.primitives.asymmetric import rsa, x25519, padding
 from cryptography.hazmat.primitives import serialization, hashes
 from shared.common import _aes_cbc_encrypt, hmac_sha256
+from cryptography.exceptions import InvalidSignature
 
 from shared.common import (
     send_frame, recv_frame, canonical_json, b64e, b64d,
@@ -23,6 +24,56 @@ def load_server_pubkey() -> rsa.RSAPublicKey:
     pub = serialization.load_pem_public_key(SERVER_PUBKEY_PATH.read_bytes())
     return pub
 
+# ================= Verify Signature helper functions ================= 
+
+def save_user_pubkey(username: str, public_key_pem_b64: str) -> Path:
+    out = PUBKEYS_DIR / f"{username}.pem"
+    out.write_bytes(b64d(public_key_pem_b64))
+    return out
+
+
+def save_doc_signature(doc_path: Path, signature_b64: str) -> Path:
+    out = SIGS_DIR / f"{doc_path.name}.sig.b64"
+    out.write_text(signature_b64, encoding="utf-8")
+    return out
+
+
+def verify_doc_signature_from_files(username: str, doc_name: str) -> bool:
+
+    pub_path = PUBKEYS_DIR / f"{username}.pem"
+    if not pub_path.exists():
+        print(f"[verify] missing pubkey file: {pub_path}")
+        return False
+
+    doc_path = DOCS_DIR / doc_name
+    sig_path = SIGS_DIR / f"{doc_name}.sig.b64"
+    if not sig_path.exists():
+        print(f"[verify] missing signature file: {sig_path}")
+        return False
+
+    pub = serialization.load_pem_public_key(pub_path.read_bytes())
+    if not isinstance(pub, rsa.RSAPublicKey):
+        print("[verify] cached public key is not RSA")
+        return False
+
+    sig = b64d(sig_path.read_text(encoding="utf-8").strip())
+    doc = doc_path.read_bytes()
+
+    try:
+        pub.verify(
+            sig,
+            doc,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH,
+            ),
+            hashes.SHA256(),
+        )
+        return True
+    except (InvalidSignature, ValueError, TypeError):
+        return False
+
+# =====================================================================
 
 def do_handshake(sock: socket.socket, server_pub: rsa.RSAPublicKey) -> SecureChannel:
 
@@ -170,7 +221,7 @@ def main():
         if not auth_resp.get("ok"):
             raise ValueError("Authentication failed")
 
-        print("Commands: createkeys | deletekeys | getpub <user> | signdoc <path> | quit")
+        print("Commands: createkeys | deletekeys | getpub <user> | signdoc <doc_name> | verify <user> <doc_name> | quit")
         while True:
             line = input("dss> ").strip()
             if not line:
@@ -188,20 +239,42 @@ def main():
                 if len(parts) != 2:
                     print("Usage: getpub <username>")
                     continue
-                print(req(ch, sock, "GetPublicKey", target_user=parts[1]))
+                target = parts[1]
+                resp = req(ch, sock, "GetPublicKey", target_user=target)
+                print(resp)
+
+                if resp.get("ok") and "public_key_pem_b64" in resp:
+                    path = save_user_pubkey(target, resp["public_key_pem_b64"])
+                    print(f"[cache] saved pubkey -> {path}")
 
             elif cmd == "signdoc":
                 if len(parts) != 2:
-                    print("Usage: signdoc <path>")
+                    print("Usage: signdoc <doc_name>")
                     continue
-                p = Path(parts[1])
+                p = DOCS_DIR / parts[1]
                 data = p.read_bytes()
                 doc_b64 = base64.b64encode(data).decode("ascii")
-                print(req(ch, sock, "SignDoc", doc_b64=doc_b64))
+                resp = req(ch, sock, "SignDoc", doc_b64=doc_b64)
+                print(resp)
+
+                if resp.get("ok") and "signature_b64" in resp:
+                    path = save_doc_signature(p, resp["signature_b64"])
+                    print(f"[cache] saved signature -> {path}")
+
+            elif cmd == "verify":
+                if len(parts) != 3:
+                    print("Usage: verify <username> <doc_name>")
+                    continue
+                user = parts[1]
+                p = Path(parts[2])
+
+                ok = verify_doc_signature_from_files(user, p)
+                print("[verify]", "VALID" if ok else "INVALID")
 
             elif cmd == "quit":
                 print(req(ch, sock, "Quit"))
                 break
+            
             else:
                 print("Unknown command")
 
