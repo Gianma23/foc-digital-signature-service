@@ -211,8 +211,7 @@ def handshake(sock: socket.socket, dss_priv: rsa.RSAPrivateKey) -> SecureChannel
     s_cert = {
         "type": "certS",
         "rsa_pub_pem_b64": b64e(pub_pem),
-        "sig_scheme": "RSA-PSS-SHA256",
-        "dh_group": "RFC3526-group14-2048",
+        "sig_scheme": "RSA-PSS-SHA256"
     }
     send_frame(sock, s_cert)
 
