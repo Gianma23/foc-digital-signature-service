@@ -25,4 +25,4 @@ def remove_user(db: dict, username: str) -> dict:
     users = db["users"]
     del users[username]
     save_db(db)
-    return "User '{username}' removed"
+    return f"User '{username}' removed"
